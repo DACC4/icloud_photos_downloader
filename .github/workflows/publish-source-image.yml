@@ -52,3 +52,17 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+      # same icloudpd inside the boredazfcuk/icloudpd wrapper (configured through env vars)
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.wrapper
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}-wrapper
+            ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}-wrapper-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}

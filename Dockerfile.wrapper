@@ -1,0 +1,13 @@
+# boredazfcuk/icloudpd wrapper (configured through environment variables) with icloudpd replaced by
+# the version from this source tree:
+#   docker build -f Dockerfile.wrapper -t icloudpd-wrapper:local .
+FROM boredazfcuk/icloudpd:latest
+
+# copy only what the package needs, so local session/cookie files never end up in the image
+COPY pyproject.toml README_PYPI.md LICENSE.md /tmp/icloudpd-src/
+COPY src /tmp/icloudpd-src/src
+
+# the wrapper runs /opt/icloudpd/bin/icloudpd from this virtual environment
+RUN /opt/icloudpd/bin/pip install --no-cache-dir /tmp/icloudpd-src \
+    && rm -rf /tmp/icloudpd-src \
+    && /opt/icloudpd/bin/python -c "import fido2, pyicloud_ipd.security_key"
