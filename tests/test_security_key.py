@@ -2,12 +2,17 @@ import inspect
 import json
 import logging
 import os
-from typing import Any, NamedTuple, Sequence
+from typing import Any, List, Mapping, NamedTuple, Sequence
 from unittest import TestCase, mock
 
 import pytest
 
-from icloudpd.authentication import request_security_key
+from icloudpd.authentication import (
+    PHOTOS_ACCESS_ATTEMPTS,
+    PHOTOS_ACCESS_INTERVAL_SECONDS,
+    request_photos_access,
+    request_security_key,
+)
 from pyicloud_ipd.exceptions import PyiCloudFailedMFAException, PyiCloudNoSecurityKeyException
 from pyicloud_ipd.security_key import (
     SecurityKeyChallenge,
@@ -191,3 +196,64 @@ class SecurityKeyTestCase(TestCase):
             )
         self.assertIn("Failed to verify security key", result.output)
         self.assertEqual(result.exit_code, 1, "exit code")
+
+
+class _FakePcsService:
+    def __init__(
+        self, consent_states: Sequence[bool], responses: Sequence[Mapping[str, Any]]
+    ) -> None:
+        self.consent_states = list(consent_states)
+        self.responses = list(responses)
+        self.consent_requested = False
+        self.pcs_requests = 0
+        self.granted = False
+
+    def request_web_access_state(self) -> Mapping[str, Any]:
+        consented = (
+            self.consent_states.pop(0) if len(self.consent_states) > 1 else self.consent_states[0]
+        )
+        return {"isDeviceConsentedForPCS": consented}
+
+    def enable_device_consent_for_pcs(self) -> Mapping[str, Any]:
+        self.consent_requested = True
+        return {}
+
+    def request_pcs(self, app_name: str) -> Mapping[str, Any]:
+        self.pcs_requests += 1
+        response = self.responses.pop(0) if self.responses else {"status": "failure"}
+        self.granted = response.get("status") == "success"
+        return response
+
+    def has_photos_pcs_cookies(self) -> bool:
+        return self.granted
+
+
+class PhotosAccessTestCase(TestCase):
+    def test_granted_after_device_approval(self) -> None:
+        # not consented: request consent, then poll until consented before requesting keys
+        service = _FakePcsService([False, False, True], [{"status": "success"}])
+        sleeps: List[float] = []
+        request_photos_access(service, logging.getLogger("test"), sleeps.append)  # type: ignore[arg-type]
+        self.assertTrue(service.consent_requested)
+        self.assertEqual(service.pcs_requests, 1)
+        self.assertEqual(sleeps, [PHOTOS_ACCESS_INTERVAL_SECONDS])
+
+    def test_already_consented(self) -> None:
+        service = _FakePcsService([True], [{"status": "success"}])
+        request_photos_access(service, logging.getLogger("test"), lambda _: None)  # type: ignore[arg-type]
+        self.assertFalse(service.consent_requested)
+
+    def test_keys_not_released_at_first(self) -> None:
+        service = _FakePcsService([True], [{}, {"status": "success"}])
+        sleeps: List[float] = []
+        request_photos_access(service, logging.getLogger("test"), sleeps.append)  # type: ignore[arg-type]
+        self.assertEqual(service.pcs_requests, 2)
+
+    def test_not_approved(self) -> None:
+        service = _FakePcsService([False], [])
+        sleeps: List[float] = []
+        with self.assertRaises(PyiCloudFailedMFAException) as context:
+            request_photos_access(service, logging.getLogger("test"), sleeps.append)  # type: ignore[arg-type]
+        self.assertIn("not approved", str(context.exception))
+        self.assertEqual(service.pcs_requests, 0)
+        self.assertEqual(len(sleeps), PHOTOS_ACCESS_ATTEMPTS - 1)

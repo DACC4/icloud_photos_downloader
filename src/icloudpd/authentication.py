@@ -106,6 +106,8 @@ def authenticator(
             _, writer = _pair
             writer(username, valid_password[0])
 
+    icloud.photos_access_handler = partial(request_photos_access, icloud, logger)
+
     if icloud.requires_2fa:
         logger.info("Two-factor authentication is required (2fa)")
         notificator()
@@ -120,6 +122,40 @@ def authenticator(
         request_2sa(icloud, logger)
 
     return icloud
+
+
+PHOTOS_ACCESS_ATTEMPTS = 30
+PHOTOS_ACCESS_INTERVAL_SECONDS = 10
+
+
+def request_photos_access(
+    icloud: PyiCloudService,
+    logger: logging.Logger,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Request release of Photos service keys by a trusted device (Advanced Data Protection)."""
+    logger.info(
+        "Advanced Data Protection is enabled: approve access to your iCloud data "
+        "on one of your trusted devices"
+    )
+    if not icloud.request_web_access_state().get("isDeviceConsentedForPCS"):
+        icloud.enable_device_consent_for_pcs()
+    for attempt in range(PHOTOS_ACCESS_ATTEMPTS):
+        # like iCloud.com: wait for the device consent first, requesting keys while the
+        # device is being armed fails
+        if icloud.request_web_access_state().get("isDeviceConsentedForPCS"):
+            response = icloud.request_pcs("photos")
+            if response.get("status") == "success" and icloud.has_photos_pcs_cookies():
+                logger.info("Access to iCloud Photos granted")
+                return
+            logger.debug("Waiting for Photos keys: %s", response.get("message"))
+        else:
+            logger.debug("Waiting for approval on a trusted device")
+        if attempt + 1 < PHOTOS_ACCESS_ATTEMPTS:
+            sleep(PHOTOS_ACCESS_INTERVAL_SECONDS)
+    raise PyiCloudFailedMFAException(
+        "Access to iCloud Photos was not approved on a trusted device. Approve it and try again"
+    )
 
 
 def request_2sa(icloud: PyiCloudService, logger: logging.Logger) -> None:

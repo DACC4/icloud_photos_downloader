@@ -163,7 +163,12 @@ class PyiCloudSession(Session):
             LOGGER.error(api_error)
 
             raise (api_error)
-        if code == "ACCESS_DENIED":
+        if code == "ACCESS_DENIED" and "private db access disabled" in reason.lower():
+            reason = (
+                reason + ". Make sure 'Access iCloud Data on the Web' is enabled; with Advanced "
+                "Data Protection, access must also be approved on a trusted device."
+            )
+        elif code == "ACCESS_DENIED":
             reason = (
                 reason + ".  Please wait a few minutes then try again."
                 "The remote servers might be trying to throttle requests."

@@ -67,6 +67,25 @@ def origin_referer_headers(input: str) -> Dict[str, str]:
     return {"Origin": input, "Referer": f"{input}/"}
 
 
+# cookies holding the Photos service keys released by a trusted device (Advanced Data Protection)
+PHOTOS_PCS_COOKIES = ("X-APPLE-WEBAUTH-PCS-Photos", "X-APPLE-WEBAUTH-PCS-Sharing")
+
+
+def is_pcs_access_denied(error: PyiCloudAPIResponseException) -> bool:
+    """Checks if the error means that service keys were not released (Advanced Data Protection)
+
+    >>> is_pcs_access_denied(
+    ...     PyiCloudAPIResponseException(
+    ...         "private db access disabled for this account", "ACCESS_DENIED"
+    ...     )
+    ... )
+    True
+    >>> is_pcs_access_denied(PyiCloudAPIResponseException("something else", "ACCESS_DENIED"))
+    False
+    """
+    return error.code == "ACCESS_DENIED" and "private db access disabled" in error.reason.lower()
+
+
 class TrustedPhoneContextProvider(NamedTuple):
     domain: str
     oauth_session: AuthenticatedSession
@@ -104,6 +123,8 @@ class PyiCloudService:
         self.http_timeout = http_timeout
         self.response_observer = response_observer
         self.observer_rules: Sequence[Rule] = []
+        # called when Photos service keys must be released by a trusted device (ADP)
+        self.photos_access_handler: Callable[[], None] | None = None
 
         # set it when we get password
         self.password_filter: PyiCloudPasswordFilter | None = None
@@ -978,6 +999,49 @@ class PyiCloudService:
             LOGGER.error("Session trust failed.")
             return False
 
+    def has_photos_pcs_cookies(self) -> bool:
+        """Returns True if the session holds unexpired Photos service key cookies (ADP)"""
+        names = {cookie.name for cookie in self.session.cookies if not cookie.is_expired()}
+        return set(PHOTOS_PCS_COOKIES) <= names
+
+    def _post_pcs(self, endpoint: str, data: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+        if self.response_observer:
+            rules = list(
+                chain(
+                    self.cookie_obfuscate_rules,
+                    self.header_obfuscate_rules,
+                    self.header_pass_rules,
+                    self.header_drop_rules,
+                )
+            )
+        else:
+            rules = []
+        try:
+            with self.use_rules(rules):
+                response = self.session.post(
+                    f"{self.SETUP_ENDPOINT}/{endpoint}",
+                    params=self.params,
+                    data=json.dumps(data) if data is not None else None,
+                    headers={"Content-Type": "application/json"},
+                )
+            payload = response.json()
+        except (PyiCloudAPIResponseException, ValueError) as error:
+            LOGGER.debug("%s failed: %s", endpoint, error)
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def request_web_access_state(self) -> Mapping[str, Any]:
+        """Returns the state of web access to data protected by Advanced Data Protection"""
+        return self._post_pcs("requestWebAccessState")
+
+    def enable_device_consent_for_pcs(self) -> Mapping[str, Any]:
+        """Asks trusted devices to approve web access to data protected by ADP"""
+        return self._post_pcs("enableDeviceConsentForPCS")
+
+    def request_pcs(self, app_name: str) -> Mapping[str, Any]:
+        """Asks trusted devices to release the service keys of the app (ADP)"""
+        return self._post_pcs("requestPCS", {"appName": app_name, "derivedFromUserAction": True})
+
     def _get_webservice_url(self, ws_key: str) -> str:
         """Get webservice URL, raise an exception if not exists."""
         if self._webservices.get(ws_key) is None:
@@ -989,7 +1053,13 @@ class PyiCloudService:
         """Gets the 'Photo' service."""
         if not self._photos:
             service_root = self._get_webservice_url("ckdatabasews")
-            self._photos = PhotosService(service_root, self.session, self.params)
+            try:
+                self._photos = PhotosService(service_root, self.session, self.params)
+            except PyiCloudAPIResponseException as error:
+                if self.photos_access_handler is None or not is_pcs_access_denied(error):
+                    raise
+                self.photos_access_handler()
+                self._photos = PhotosService(service_root, self.session, self.params)
         return self._photos
 
     def __unicode__(self) -> str:

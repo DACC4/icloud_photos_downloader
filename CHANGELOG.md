@@ -3,6 +3,7 @@
 ## Unreleased
 
 - feature: support two-factor authentication with FIDO2 security keys
+- feature: support accounts with Advanced Data Protection by requesting Photos access approval on a trusted device
 
 ## 1.32.3 (2026-05-29)
 

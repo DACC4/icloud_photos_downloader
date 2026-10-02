@@ -1,6 +1,6 @@
 import inspect
 import os
-from unittest import TestCase
+from unittest import TestCase, mock
 
 import pytest
 
@@ -42,4 +42,30 @@ class ListingAlbumsTestCase(TestCase):
         self.assertIn("Recently Deleted", albums)
         self.assertIn("Favorites", albums)
 
+        self.assertEqual(result.exit_code, 0, "exit code")
+
+    def test_listing_albums_with_adp(self) -> None:
+        base_dir = os.path.join(self.fixtures_path, inspect.stack()[0][3])
+
+        with mock.patch("icloudpd.authentication.PHOTOS_ACCESS_INTERVAL_SECONDS", 0):
+            _, result = run_icloudpd_test(
+                self.assertEqual,
+                self.root_path,
+                base_dir,
+                "listing_albums_adp.yml",
+                [],
+                [],
+                [
+                    "--username",
+                    "jdoe@gmail.com",
+                    "--password",
+                    "password1",
+                    "--list-albums",
+                    "--no-progress-bar",
+                ],
+            )
+
+        self.assertIn("Advanced Data Protection is enabled", result.output)
+        self.assertIn("Access to iCloud Photos granted", result.output)
+        self.assertIn("WhatsApp", result.output.splitlines())
         self.assertEqual(result.exit_code, 0, "exit code")

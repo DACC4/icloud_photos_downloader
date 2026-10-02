@@ -64,9 +64,25 @@ Repeat the steps above to renew it.
 
 Alternatively, pass the key into the container with `--device /dev/hidraw0` (the device number may differ) and keep it plugged into the server.
 
+(adp)=
 ## ADP
 
-Advanced Data Protection (ADP) for iCloud accounts is not supported because `icloudpd` simulates web access, which is disabled with ADP.
+```{versionadded} Unreleased
+```
+
+Accounts with Advanced Data Protection (ADP) are supported when `Settings > Apple ID > iCloud > Access iCloud Data on the Web` is enabled.
+
+With ADP, the keys to your photos are only on your devices. When `icloudpd` accesses the library and Apple reports that access is not approved yet,
+`icloudpd` asks your trusted devices to release the Photos keys, the same way iCloud.com does, and waits up to 5 minutes:
+
+```
+INFO     Advanced Data Protection is enabled: approve access to your iCloud data on one of your trusted devices
+INFO     Access to iCloud Photos granted
+```
+
+Approve the prompt on your iPhone, iPad or Mac. The approval is stored in the [cookie directory](cookie-directory-parameter) and currently lasts 30 days;
+after that, the next run asks for approval again. The approval only needs a tap on a trusted device, so it also works for headless servers and Docker.
+`--auth-only` does not access the library, so the approval is requested on the first sync.
 
 ## Occasional Errors
 

@@ -1,0 +1,33 @@
+# Image built directly from the source tree (no static binaries), e.g. for testing a branch:
+#   docker build -f Dockerfile.source -t icloudpd:local .
+FROM python:3.13-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/*
+ENV TZ=UTC
+WORKDIR /app
+
+# copy only what the package needs, so local session/cookie files never end up in the image
+COPY pyproject.toml README_PYPI.md LICENSE.md ./
+COPY src ./src
+RUN pip install --no-cache-dir . && rm -rf /app/src /app/build
+
+EXPOSE 8080
+
+# same entrypoint contract as the official image: first argument selects the executable
+COPY <<EOF /app/entrypoint.sh
+#!/bin/sh
+case "\$1" in
+    icloud|icloudpd)
+        exec "\$@"
+        ;;
+    *)
+        echo "Error: You must specify either 'icloud' or 'icloudpd' as the first argument."
+        echo "Usage: docker run <image> icloudpd [options]"
+        echo "   or: docker run <image> icloud [options]"
+        exit 1
+        ;;
+esac
+EOF
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
