@@ -204,7 +204,7 @@ class _FakePcsService:
     ) -> None:
         self.consent_states = list(consent_states)
         self.responses = list(responses)
-        self.consent_requested = False
+        self.consent_requests = 0
         self.pcs_requests = 0
         self.granted = False
 
@@ -215,7 +215,7 @@ class _FakePcsService:
         return {"isDeviceConsentedForPCS": consented}
 
     def enable_device_consent_for_pcs(self) -> Mapping[str, Any]:
-        self.consent_requested = True
+        self.consent_requests += 1
         return {}
 
     def request_pcs(self, app_name: str) -> Mapping[str, Any]:
@@ -234,14 +234,15 @@ class PhotosAccessTestCase(TestCase):
         service = _FakePcsService([False, False, True], [{"status": "success"}])
         sleeps: List[float] = []
         request_photos_access(service, logging.getLogger("test"), sleeps.append)  # type: ignore[arg-type]
-        self.assertTrue(service.consent_requested)
+        # a single approval request reaches the devices, keys are requested only once consented
+        self.assertEqual(service.consent_requests, 1)
         self.assertEqual(service.pcs_requests, 1)
         self.assertEqual(sleeps, [PHOTOS_ACCESS_INTERVAL_SECONDS])
 
     def test_already_consented(self) -> None:
         service = _FakePcsService([True], [{"status": "success"}])
         request_photos_access(service, logging.getLogger("test"), lambda _: None)  # type: ignore[arg-type]
-        self.assertFalse(service.consent_requested)
+        self.assertEqual(service.consent_requests, 0)
 
     def test_keys_not_released_at_first(self) -> None:
         service = _FakePcsService([True], [{}, {"status": "success"}])
@@ -255,5 +256,7 @@ class PhotosAccessTestCase(TestCase):
         with self.assertRaises(PyiCloudFailedMFAException) as context:
             request_photos_access(service, logging.getLogger("test"), sleeps.append)  # type: ignore[arg-type]
         self.assertIn("not approved", str(context.exception))
+        # waiting the whole time must not send more approval requests
+        self.assertEqual(service.consent_requests, 1)
         self.assertEqual(service.pcs_requests, 0)
         self.assertEqual(len(sleeps), PHOTOS_ACCESS_ATTEMPTS - 1)
