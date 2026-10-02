@@ -127,7 +127,16 @@ def main(args: Sequence[str] | None = None) -> NoReturn:
                 if is_affirmative(user_response):
                     utils.store_password_in_keyring(username, password)
 
-            if api.requires_2fa:
+            challenge = api.get_security_key_challenge() if api.requires_2fa else None
+            if challenge is not None:
+                print("\nSecurity key required. Touch your security key to continue...")
+                if not api.validate_security_key(challenge):
+                    print("Failed to verify security key")
+                    sys.exit(1)
+
+                print("")
+
+            elif api.requires_2fa:
                 # fmt: off
                 print(
                     "\nTwo-step authentication required.",

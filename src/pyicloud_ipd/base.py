@@ -30,6 +30,14 @@ from pyicloud_ipd.exceptions import (
     PyiCloudFailedLoginException,
     PyiCloudServiceNotActivatedException,
 )
+from pyicloud_ipd.security_key import (
+    SecurityKeyChallenge,
+    WebAuthnAssertion,
+    build_security_key_options_request,
+    build_verify_security_key_request,
+    get_assertion_from_device,
+    parse_security_key_challenge,
+)
 from pyicloud_ipd.services.photos import PhotosService
 from pyicloud_ipd.session import PyiCloudPasswordFilter, PyiCloudSession
 from pyicloud_ipd.sms import (
@@ -274,6 +282,12 @@ class PyiCloudService:
             )
         )
         self.auth_token_body_drop_rules = self.validate_response_body_drop_rules
+        self.auth_security_key_body_obfuscate_rules = obfuscate_rules_from_pattern(
+            [
+                r"^request\.content\.(challenge|clientData|authenticatorData|signatureData|userHandle|credentialID)$",
+                r"^response\.content\.fsaChallenge\.",
+            ]
+        )
 
         self.authenticate()
 
@@ -693,6 +707,85 @@ class PyiCloudService:
             response = self.send_request(request)
 
         return parse_trusted_phone_numbers_response(response)
+
+    def get_security_key_challenge(self) -> SecurityKeyChallenge | None:
+        """Returns WebAuthn challenge for security key 2fa, if security keys are enrolled"""
+
+        oauth_session = self.get_oauth_session()
+        context = TrustedPhoneContextProvider(domain=self.domain, oauth_session=oauth_session)
+
+        req = build_security_key_options_request(context)
+        request = Request(method=req.method, url=req.url, headers=req.headers).prepare()
+
+        if self.response_observer:
+            rules = list(
+                chain(
+                    self.cookie_obfuscate_rules,
+                    self.header_obfuscate_rules,
+                    self.header_pass_rules,
+                    self.header_drop_rules,
+                    self.auth_security_key_body_obfuscate_rules,
+                )
+            )
+        else:
+            rules = []
+
+        with self.use_rules(rules):
+            response = self.send_request(request)
+
+        try:
+            payload = response.json() if response.ok else None
+        except ValueError:
+            payload = None
+        if not isinstance(payload, Mapping):
+            LOGGER.debug("Auth options are not available as JSON (%s)", response.status_code)
+            return None
+        LOGGER.debug("Auth options keys: %s", sorted(payload.keys()))
+        return parse_security_key_challenge(payload)
+
+    def validate_security_key(
+        self,
+        challenge: SecurityKeyChallenge,
+        get_assertion: Callable[
+            [SecurityKeyChallenge], WebAuthnAssertion
+        ] = get_assertion_from_device,
+    ) -> bool:
+        """Performs WebAuthn assertion with a security key and submits it to Apple's 2FA system"""
+
+        assertion = get_assertion(challenge)
+
+        oauth_session = self.get_oauth_session()
+        context = TrustedPhoneContextProvider(domain=self.domain, oauth_session=oauth_session)
+
+        req = build_verify_security_key_request(context, challenge, assertion)
+        request = Request(
+            method=req.method,
+            url=req.url,
+            headers=req.headers,
+            data=req.data,
+            json=req.json,
+        ).prepare()
+
+        if self.response_observer:
+            rules = list(
+                chain(
+                    self.cookie_obfuscate_rules,
+                    self.header_obfuscate_rules,
+                    self.header_pass_rules,
+                    self.header_drop_rules,
+                    self.auth_security_key_body_obfuscate_rules,
+                )
+            )
+        else:
+            rules = []
+
+        with self.use_rules(rules):
+            response = self.send_request(request)
+
+        if response.ok:
+            return self.trust_session()
+        LOGGER.error("Security key verification failed.")
+        return False
 
     def trigger_push_notification(self) -> bool:
         """Triggers a push notification to trusted devices for 2FA code entry.

@@ -71,6 +71,9 @@ icloudpd --username my@email.address --password my_password --auth-only
 > [!TIP]
 > This feature can also be used to check and verify that the session is still authenticated. 
 
+> [!TIP]
+> Accounts protected with FIDO2 security keys are supported: touch your key when prompted. For servers and Docker, see [Security Keys](https://icloud-photos-downloader.github.io/icloud_photos_downloader/authentication.html#security-keys) for how to authenticate on another computer and copy the session.
+
 ## Contributing
 
 Want to contribute to iCloud Photos Downloader? Awesome! Check out the [contributing guidelines](CONTRIBUTING.md) to get involved.

@@ -30,9 +30,39 @@ Other options: *webui*
 
 Access to iCloud.com is blocked from mainland China. `icloudpd` can be used with the [`--domain cn`](domain-parameter) parameter to support downloading iCloud Photos from mainland China; however, people have reported mixed results with that parameter.
 
-## FIDO
+(security-keys)=
+## Security Keys (FIDO2)
 
-Authentication to iCloud with hardware keys (FIDO) is not supported.
+```{versionadded} Unreleased
+```
+
+If your Apple account is protected with [Security Keys](https://support.apple.com/en-us/102637), Apple does not send codes to trusted devices
+or phone numbers for web sign-in. Instead, `icloudpd` asks you to touch one of your FIDO2 security keys (e.g. a YubiKey) while it authenticates.
+
+The security key must be connected (USB) to the machine running `icloudpd`. This also applies when the [`webui`](mfa-provider-parameter) MFA provider is used:
+the web interface cannot relay the key from your browser, because the key response is bound to Apple's sign-in site.
+
+On Linux, the user running `icloudpd` needs read/write access to the `/dev/hidraw*` device of the key. Most distributions grant it to the logged-in
+user through udev rules (often shipped with packages like `libfido2` or `yubikey-manager`).
+
+### Headless servers and Docker
+
+If `icloudpd` runs on a server, NAS or in Docker, where the key cannot be plugged in, authenticate on a computer that has the key and copy the session
+to the server:
+
+1. On the computer with the key, run:
+   ```
+   icloudpd --username my@email.address --cookie-directory ./cookies --auth-only
+   ```
+2. Copy both files created for your account in `./cookies` (the cookie jar named after the username and the `.session` file) into the
+   [cookie directory](cookie-directory-parameter) used by `icloudpd` on the server. With Docker, mount a host folder into the container
+   (e.g. `-v /path/to/cookies:/cookies`) and pass `--cookie-directory /cookies` so the session survives container restarts.
+3. Run `icloudpd` on the server as usual. It reuses the session without asking for MFA.
+
+When the session expires (see above), `icloudpd` on the server fails with a security key error, and sends an email notification if SMTP is configured.
+Repeat the steps above to renew it.
+
+Alternatively, pass the key into the container with `--device /dev/hidraw0` (the device number may differ) and keep it plugged into the server.
 
 ## ADP
 

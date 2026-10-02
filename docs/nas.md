@@ -2,6 +2,8 @@
 
 The following are example setups for NAS.
 
+If your Apple account uses FIDO2 security keys, see [Security Keys](security-keys) for how to authenticate on another computer and copy the session to the NAS.
+
 ## TrueNAS
 
 Use the [`Install Custom App` button](https://www.truenas.com/docs/scale/23.10/scaletutorials/apps/usingcustomapp/) to set up `icloudpd`:

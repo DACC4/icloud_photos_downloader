@@ -10,6 +10,11 @@ from icloudpd.mfa_provider import MFAProvider
 from icloudpd.status import Status, StatusExchange
 from pyicloud_ipd.base import PyiCloudService
 from pyicloud_ipd.exceptions import PyiCloudFailedMFAException
+from pyicloud_ipd.security_key import (
+    SecurityKeyChallenge,
+    WebAuthnAssertion,
+    get_assertion_from_device,
+)
 
 
 def prompt_int_range(message: str, default: str, min_val: int, max_val: int) -> int:
@@ -149,9 +154,51 @@ def request_2sa(icloud: PyiCloudService, logger: logging.Logger) -> None:
     )
 
 
-def request_2fa(icloud: PyiCloudService, logger: logging.Logger) -> None:
+ALL_SET_2FA_MESSAGE = (
+    "Great, you're all set up. The script can now be run without "
+    "user interaction until 2FA expires.\n"
+    "You can set up email notifications for when "
+    "the two-factor authentication expires.\n"
+    "(Use --help to view information about SMTP options.)"
+)
+
+
+def default_get_assertion(challenge: SecurityKeyChallenge) -> WebAuthnAssertion:
+    return get_assertion_from_device(
+        challenge, partial(echo, "Touch your security key to continue...")
+    )
+
+
+def request_security_key(
+    icloud: PyiCloudService,
+    logger: logging.Logger,
+    challenge: SecurityKeyChallenge,
+    get_assertion: Callable[[SecurityKeyChallenge], WebAuthnAssertion] | None = None,
+) -> None:
+    """Request two-factor authentication with a FIDO2 security key."""
+    key_names = ", ".join(challenge.key_names)
+    logger.info(
+        "Security key is required for two-factor authentication. "
+        f"Connect one of your security keys{f' ({key_names})' if key_names else ''} to this machine"
+    )
+    if not icloud.validate_security_key(challenge, get_assertion or default_get_assertion):
+        raise PyiCloudFailedMFAException("Failed to verify security key")
+    logger.info(ALL_SET_2FA_MESSAGE)
+
+
+def request_2fa(
+    icloud: PyiCloudService,
+    logger: logging.Logger,
+    get_assertion: Callable[[SecurityKeyChallenge], WebAuthnAssertion] | None = None,
+) -> None:
     """Request two-factor authentication."""
     devices = icloud.get_trusted_phone_numbers()
+
+    # Accounts with security keys enrolled cannot receive codes for web sign-in
+    challenge = icloud.get_security_key_challenge()
+    if challenge is not None:
+        request_security_key(icloud, logger, challenge, get_assertion)
+        return
 
     # Trigger push notification to trusted devices before prompting for code.
     # Apple's auth flow (2026+) requires a PUT to /verify/trusteddevice/securitycode
@@ -238,19 +285,20 @@ def request_2fa(icloud: PyiCloudService, logger: logging.Logger) -> None:
             echo("Invalid code, should be six digits. Try again")
         if not icloud.validate_2fa_code(code):
             raise PyiCloudFailedMFAException("Failed to verify two-factor authentication code")
-    logger.info(
-        "Great, you're all set up. The script can now be run without "
-        "user interaction until 2FA expires.\n"
-        "You can set up email notifications for when "
-        "the two-factor authentication expires.\n"
-        "(Use --help to view information about SMTP options.)"
-    )
+    logger.info(ALL_SET_2FA_MESSAGE)
 
 
 def request_2fa_web(
     icloud: PyiCloudService, logger: logging.Logger, status_exchange: StatusExchange
 ) -> None:
     """Request two-factor authentication through Webui."""
+    challenge = icloud.get_security_key_challenge()
+    if challenge is not None:
+        # WebAuthn assertion is bound to Apple's origin, so it cannot be relayed through
+        # the Web UI; the key has to be connected to the machine running icloudpd
+        request_security_key(icloud, logger, challenge)
+        return
+
     # Trigger push notification to trusted devices before prompting for code.
     # Apple's auth flow (2026+) requires a PUT to /verify/trusteddevice/securitycode
     # to initiate code delivery. Failure is non-fatal — the user can still enter
@@ -291,12 +339,6 @@ def request_2fa_web(
             else:
                 status_exchange.replace_status(Status.CHECKING_MFA, Status.NO_INPUT_NEEDED)  # done
 
-                logger.info(
-                    "Great, you're all set up. The script can now be run without "
-                    "user interaction until 2FA expires.\n"
-                    "You can set up email notifications for when "
-                    "the two-factor authentication expires.\n"
-                    "(Use --help to view information about SMTP options.)"
-                )
+                logger.info(ALL_SET_2FA_MESSAGE)
         else:
             raise PyiCloudFailedMFAException("Failed to change status")
